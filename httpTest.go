@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/http"
+	"time"
 )
 
 func main() {
@@ -11,25 +12,45 @@ func main() {
 }
 
 func httpTest() {
-	url := "http://localhost:8090/hello"
-	jsonStr := []byte(`{"title":"Buy cheese and bread for breakfast."}`)
-	// resp, err := http.Post(url, "application/json", bytes.NewBuffer(jsonStr))
-
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
-	if err != nil {
-		//TO DO - make this catch more specific
-		fmt.Println("We have an error: ", err)
-	}
+	url := "http://localhost:8090/appendEntries"
+	jsonStr := []byte(`{"key":"value"}`)
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error encountered when doing post request")
+
+	for i := 0; i < 3; i++ {
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+		if err != nil {
+			//TO DO - make this catch more specific
+			fmt.Println("We have an error: ", err)
+		}
+		_, err = client.Do(req)
+		if err != nil {
+			fmt.Println("Error encountered when doing post request:", err)
+		}
+		time.Sleep(2 * time.Second)
 	}
 
-	g_req, err := http.NewRequest("GET", url, nil)
-	resp, err = client.Do(g_req)
-	if err != nil {
-		fmt.Println("Error encountered when doing get request")
-	}
-	fmt.Println("response Status:", resp)
+	// req, err = http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+	// if err != nil {
+	// 	//TO DO - make this catch more specific
+	// 	fmt.Println("We have an error: ", err)
+	// }
+	// _, err = client.Do(req)
+	// if err != nil {
+	// 	fmt.Println("Error encountered when doing post request:", err)
+	// }
+	// time.Sleep(2 * time.Second)
+	//}
+
+	// req, err = http.NewRequest("POST", "http://localhost:8090/kill", bytes.NewBuffer(jsonStr))
+	// _, err = client.Do(req)
+	// if err != nil {
+	// 	fmt.Println("Error encountered when doing post request:", err)
+	// }
+	// time.Sleep(1 * time.Second)
+
+	//body, err := io.ReadAll(resp.Body)
+	// if err != nil {
+	// 	fmt.Println("Error reading the response body")
+	// }
+	// fmt.Println("response:", string(body))
 }
