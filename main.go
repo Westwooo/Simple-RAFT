@@ -17,6 +17,9 @@ const (
 	upLine    = "\033[A"
 )
 
+//How could I use a RAFT interface to make this neater?
+//Create HTTP manager that has http,client, ports maybe?
+
 // Do these structs need to be public
 type Node struct {
 	id            string
@@ -62,7 +65,7 @@ func newNode(id string) Node {
 }
 
 func main() {
-	heartbeat := make(chan string, 1)
+	heartbeat := make(chan int, 1)
 	var wg sync.WaitGroup
 	rand.Seed(time.Now().UnixNano())
 
@@ -101,7 +104,8 @@ func main() {
 		if node.state == "Follower" {
 			displayNode(node)
 			select {
-			case <-heartbeat:
+			case lTerm := <-heartbeat:
+				node.currentTerm = lTerm
 			case <-time.After((time.Second * 3)):
 				//Format output to neatly prin candidate info
 				fmt.Println("")
@@ -120,9 +124,10 @@ func main() {
 			displayNode(node)
 
 			select {
-			case <-heartbeat:
+			case lTerm := <-heartbeat:
 				fmt.Print(clearLine, upLine, clearLine)
 				node.state = "Follower"
+				node.currentTerm = lTerm
 			case <-time.After(electionTime):
 				startElection(&node, ports, client)
 
@@ -157,9 +162,14 @@ func sendHeartbeat(node Node, ports [4]string) {
 	for _, port := range ports {
 		if port != node.id {
 			url := "http://localhost:" + port + "/appendEntries"
-			jsonStr := []byte(`{"key":"value"}`)
+
+			aReq := AppendRequest{
+				Term:    node.currentTerm,
+				Entries: nil,
+			}
+			data, err := json.Marshal(aReq)
 			client := &http.Client{}
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonStr))
+			req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
 			if err != nil {
 				//TO DO - make this catch more specific
 				fmt.Println("We have an error: ", err)
@@ -173,11 +183,24 @@ func sendHeartbeat(node Node, ports [4]string) {
 	}
 }
 
-func appendEntries(heart chan string) http.HandlerFunc {
+func appendEntries(heart chan int) http.HandlerFunc {
 	// A handler fucntion for AppendEntries RPCs
 	return func(w http.ResponseWriter, req *http.Request) {
-
-		heart <- "PING"
+		defer req.Body.Close()
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			fmt.Println("Could not read the response body")
+		}
+		aReq := AppendRequest{}
+		err = json.Unmarshal(body, &aReq)
+		if err != nil {
+			//fmt.Println("Could not unmarshall requestVote json")
+		} else {
+			if aReq.Entries == nil {
+				heart <- aReq.Term
+			}
+			//else contains log entries to be added
+		}
 	}
 }
 
