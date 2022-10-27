@@ -21,23 +21,25 @@ const (
 //Create HTTP manager that has http,client, ports maybe?
 
 type RAFT interface {
-	voteForMe(VoteRequest, string) VoteResponse //Send a vote to the node identified by the string
+	voteForMe(VoteRequest, string) VoteResponse //Send a voteRequest to the node identified by the string
 	setConns()                                  //Set the connections of a node appropriately
-	runServer(Node)                             //
+	runServer(Node)                             //Run the server listening in the appropriate way
 }
 
 //How to implement the server on the node?
 
 // Do these structs need to be public
 type Node struct {
+	heart         chan int
 	id            string
 	state         string
-	currentTerm   int
 	votedFor      string
+	conns         []string
+	currentTerm   int
 	commitIndex   int
 	svrs          int
 	votesRecieved int
-	heart         chan int
+	wg            sync.WaitGroup
 }
 
 type VoteRequest struct {
@@ -62,44 +64,49 @@ type AppendResponse struct {
 	Success bool `json:"success"`
 }
 
-func newNode(id string) Node {
+func newNode() Node {
 	return Node{
 		currentTerm: 0,
 		votedFor:    "",
 		state:       "Follower",
-		id:          id,
 		svrs:        0,
+		heart:       make(chan int, 1),
 	}
 }
 
-func main() {
-	var wg sync.WaitGroup
-	rand.Seed(time.Now().UnixNano())
-
-	//Node has list of connections
-	var ports [4]string
-	ports[0] = "8080"
-	ports[1] = "8081"
-	ports[2] = "8082"
-	ports[3] = "8083"
-
+func (n *Node) runServer() {
 	portIndex := 0
-	wg.Add(1)
+	n.wg.Add(1)
 	go func() {
-		defer wg.Done()
-		for _, port := range ports {
-			//fmt.Printf("Connecting to localhost:%s...\n", port)
-			server(port)
+		defer n.wg.Done()
+		for _, port := range n.conns {
+			err := http.ListenAndServe(":"+port, nil)
+			if errors.Is(err, http.ErrServerClosed) {
+				fmt.Println("server closed")
+			} else if err != nil {
+				//This port is in use, try the next one
+			}
 			portIndex++
 		}
 	}()
-
 	time.Sleep(1 * time.Second)
+	n.id = n.conns[portIndex]
+}
 
-	fmt.Printf("Listening on port: %s\n", ports[portIndex])
+func main() {
 
-	node := newNode(ports[portIndex])
-	node.heart = make(chan int, 1)
+	//Seed random generator for the generated times later
+	rand.Seed(time.Now().UnixNano())
+
+	//Create a new node, set connections and run the server
+	node := newNode()
+	node.setConns()
+	node.runServer()
+
+	fmt.Printf("Listening on port: %s\n", node.id)
+
+	//node.id = node.conns[portIndex]
+
 	fmt.Print("\n\n")
 	displayNode(node)
 
@@ -131,10 +138,10 @@ func main() {
 				node.state = "Follower"
 				node.currentTerm = lTerm
 			case <-time.After(electionTime):
-				startElection(&node, ports, client)
+				startElection(&node, client)
 				if node.votesRecieved > node.svrs/2 {
 					node.state = "Leader"
-					sendHeartbeat(&node, ports)
+					sendHeartbeat(&node)
 				} else {
 					electionTime = time.Duration(rand.Intn(1000000000) * 3)
 				}
@@ -142,25 +149,15 @@ func main() {
 		}
 		if node.state == "Leader" {
 			displayNode(node)
-			sendHeartbeat(&node, ports)
+			sendHeartbeat(&node)
 			time.Sleep(2 * time.Second)
 		}
 	}
 }
 
-func server(port string) {
-	err := http.ListenAndServe(":"+port, nil)
-	if errors.Is(err, http.ErrServerClosed) {
-		fmt.Println("server closed")
-		//Is there a specific error for port alreadyin use?
-	} else if err != nil {
-		//fmt.Printf("Port %s is in use, trying next one\n", port)
-	}
-}
-
-func sendHeartbeat(n *Node, ports [4]string) {
+func sendHeartbeat(n *Node) {
 	n.svrs = 1
-	for _, port := range ports {
+	for _, port := range n.conns {
 		if port != n.id {
 			url := "http://localhost:" + port + "/appendEntries"
 
@@ -186,6 +183,12 @@ func sendHeartbeat(n *Node, ports [4]string) {
 	}
 }
 
+func (n *Node) setConns() {
+	var conns []string
+	conns = append(conns, "8080", "8081", "8082", "8083")
+	n.conns = conns
+}
+
 func appendEntries(heart chan int) http.HandlerFunc {
 	// A handler fucntion for AppendEntries RPCs
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -207,8 +210,7 @@ func appendEntries(heart chan int) http.HandlerFunc {
 	}
 }
 
-//We want http handler function to
-
+// We want http handler function to
 func requestVote(node *Node) http.HandlerFunc {
 	// A handler fucntion for RequestVote RPCs
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -245,7 +247,7 @@ func (n *Node) response(vReq VoteRequest) VoteResponse {
 	return vRes
 }
 
-func startElection(n *Node, ps [4]string, c *http.Client) {
+func startElection(n *Node, c *http.Client) {
 	//startElection(node, ports, client)
 	//Increment current term and transition to candidate state
 	n.state = "Candidate"
@@ -263,10 +265,9 @@ func startElection(n *Node, ps [4]string, c *http.Client) {
 	n.votesRecieved = 1
 
 	//Paralellize this
-	for _, port := range ps {
+	for _, port := range n.conns {
 		if port != n.id {
 			vRes := n.voteForMe(vReq, port, c)
-			//fmt.Println(vRes)
 			if vRes.VoteGranted {
 				n.votesRecieved++
 			}
