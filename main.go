@@ -139,7 +139,7 @@ func main() {
 				node.currentTerm = lTerm
 			case <-time.After(electionTime):
 				startElection(&node, client)
-				if node.votesRecieved > node.svrs/2 {
+				if node.votesRecieved > node.svrs/2 || (node.votesRecieved >= node.svrs/2 && node.svrs%2 == 0) {
 					node.state = "Leader"
 					sendHeartbeat(&node)
 				} else {
@@ -149,8 +149,17 @@ func main() {
 		}
 		if node.state == "Leader" {
 			displayNode(node)
-			sendHeartbeat(&node)
-			time.Sleep(2 * time.Second)
+			select {
+			case lTerm := <-node.heart:
+				if lTerm > node.currentTerm {
+					node.state = "Follower"
+				} else if lTerm == node.currentTerm {
+					node.state = "Candidate"
+					electionTime = time.Duration(rand.Intn(1000000000) * 3)
+				}
+			case <-time.After(2 * time.Second):
+				sendHeartbeat(&node)
+			}
 		}
 	}
 }
@@ -185,7 +194,7 @@ func sendHeartbeat(n *Node) {
 
 func (n *Node) setConns() {
 	var conns []string
-	conns = append(conns, "8080", "8081", "8082", "8083")
+	conns = append(conns, "8080", "8081", "8082", "8083", "8084")
 	n.conns = conns
 }
 
@@ -251,6 +260,7 @@ func startElection(n *Node, c *http.Client) {
 	//startElection(node, ports, client)
 	//Increment current term and transition to candidate state
 	n.state = "Candidate"
+	n.votedFor = ""
 	n.currentTerm++
 	displayNode(*n)
 
