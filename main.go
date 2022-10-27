@@ -24,6 +24,7 @@ const (
 type Node struct {
 	id            string
 	state         string
+	pState        string
 	currentTerm   int
 	votedFor      string
 	commitIndex   int
@@ -69,6 +70,7 @@ func main() {
 	var wg sync.WaitGroup
 	rand.Seed(time.Now().UnixNano())
 
+	//Node has list of connections
 	var ports [4]string
 	ports[0] = "8080"
 	ports[1] = "8081"
@@ -94,6 +96,7 @@ func main() {
 	fmt.Print("\n\n")
 	displayNode(node)
 
+	//TO DO: make client part of node
 	client := &http.Client{}
 	http.HandleFunc("/requestVote", requestVote(&node))
 	http.HandleFunc("/appendEntries", appendEntries(heartbeat))
@@ -101,48 +104,38 @@ func main() {
 	electionTime := time.Duration(0)
 
 	for {
+		displayNode(node)
 		if node.state == "Follower" {
-			displayNode(node)
 			select {
 			case lTerm := <-heartbeat:
 				node.currentTerm = lTerm
 			case <-time.After((time.Second * 3)):
-				//Format output to neatly prin candidate info
+				//Follower -> Candidate needs this
 				fmt.Println("")
-				//startElection(&node, ports, client)
-
-				if node.votesRecieved > node.svrs/2 {
-					node.state = "Leader"
-					sendHeartbeat(node, ports)
-				} else {
-					node.state = "Candidate"
-					electionTime = 0
-				}
+				node.pState = node.state
+				node.state = "Candidate"
+				electionTime = 0
 			}
 		}
 		if node.state == "Candidate" {
-			displayNode(node)
-
 			select {
 			case lTerm := <-heartbeat:
+				//Candidate -> Follower needs this
 				fmt.Print(clearLine, upLine, clearLine)
 				node.state = "Follower"
 				node.currentTerm = lTerm
 			case <-time.After(electionTime):
 				startElection(&node, ports, client)
-
 				if node.votesRecieved > node.svrs/2 {
 					node.state = "Leader"
-					sendHeartbeat(node, ports)
+					sendHeartbeat(&node, ports)
 				} else {
-					node.state = "Candidate"
 					electionTime = time.Duration(rand.Intn(1000000000) * 3)
 				}
 			}
 		}
 		if node.state == "Leader" {
-			displayNode(node)
-			sendHeartbeat(node, ports)
+			sendHeartbeat(&node, ports)
 			time.Sleep(2 * time.Second)
 		}
 	}
@@ -158,13 +151,14 @@ func server(port string) {
 	}
 }
 
-func sendHeartbeat(node Node, ports [4]string) {
+func sendHeartbeat(n *Node, ports [4]string) {
+	n.svrs = 1
 	for _, port := range ports {
-		if port != node.id {
+		if port != n.id {
 			url := "http://localhost:" + port + "/appendEntries"
 
 			aReq := AppendRequest{
-				Term:    node.currentTerm,
+				Term:    n.currentTerm,
 				Entries: nil,
 			}
 			data, err := json.Marshal(aReq)
@@ -178,6 +172,8 @@ func sendHeartbeat(node Node, ports [4]string) {
 			if err != nil {
 				//TO DO: is tjere a reason to handle this?
 				//fmt.Println("Error encountered when sending heart beat:", err)
+			} else {
+				n.svrs++
 			}
 		}
 	}
@@ -250,51 +246,57 @@ func startElection(n *Node, ps [4]string, c *http.Client) {
 		Term:        n.currentTerm,
 		CandidateId: n.id,
 	}
-	data, err := json.Marshal(vReq)
-	if err != nil {
-		fmt.Println("Error while marshaling vote request")
-	}
 
+	//Node knows it is in cluster, and votes for itself
 	n.svrs = 1
 	n.votesRecieved = 1
 
 	//Paralellize this
 	for _, port := range ps {
 		if port != n.id {
-			url := "http://localhost:" + port + "/requestVote"
-
-			//jsonStr := []byte(`{"key":"value"}`)
-			req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
-			if err != nil {
-				//TO DO - make this catch more specific
-				fmt.Println("We have an error: ", err)
-			}
-			res, err := c.Do(req)
-			if err != nil {
-				//fmt.Println("Error encountered when doing post request:", err)
-			} else {
-				n.svrs++
-				//Process the response to see if am new leader
-				//Create inline function to trigger defern earlier
-				defer res.Body.Close()
-				body, err := io.ReadAll(res.Body)
-				if err != nil {
-					//fmt.Println("Could not read the response body")
-				}
-				vRes := VoteResponse{}
-
-				err = json.Unmarshal(body, &vRes)
-				if err != nil {
-					//fmt.Println("Could not unmarshall requestVote json")
-				}
-				//fmt.Println(vRes)
-				if vRes.VoteGranted {
-					n.votesRecieved++
-				}
+			vRes := n.voteForMe(vReq, port, c)
+			//fmt.Println(vRes)
+			if vRes.VoteGranted {
+				n.votesRecieved++
 			}
 		}
 	}
 	displayNode(*n)
+}
+
+// voteForMe takes a voteRequest and resturns a voteResponse,
+// Node doesn't need to worry how it gets there
+func (n *Node) voteForMe(vReq VoteRequest, con string, c *http.Client) VoteResponse {
+	data, err := json.Marshal(vReq)
+	if err != nil {
+		fmt.Println("Error while marshaling vote request")
+	}
+	url := "http://localhost:" + con + "/requestVote"
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
+	if err != nil {
+		fmt.Println("error creating HTTP request: ", err)
+	}
+	res, err := c.Do(req)
+	if err != nil {
+		//Error will occur when sending vote to servers that are down
+	} else {
+		n.svrs++
+		//Process the response to see if am new leader
+		//Create inline function to trigger defern earlier
+		defer res.Body.Close()
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			//fmt.Println("Could not read the response body")
+		}
+		vRes := VoteResponse{}
+
+		err = json.Unmarshal(body, &vRes)
+		if err != nil {
+			//fmt.Println("Could not unmarshall requestVote json")
+		}
+		return vRes
+	}
+	return VoteResponse{VoteGranted: false}
 }
 
 func displayNode(node Node) {
