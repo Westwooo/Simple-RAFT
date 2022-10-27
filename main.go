@@ -20,17 +20,24 @@ const (
 //How could I use a RAFT interface to make this neater?
 //Create HTTP manager that has http,client, ports maybe?
 
+type RAFT interface {
+	voteForMe(VoteRequest, string) VoteResponse //Send a vote to the node identified by the string
+	setConns()                                  //Set the connections of a node appropriately
+	runServer(Node)                             //
+}
+
+//How to implement the server on the node?
+
 // Do these structs need to be public
 type Node struct {
 	id            string
 	state         string
-	pState        string
 	currentTerm   int
 	votedFor      string
 	commitIndex   int
 	svrs          int
 	votesRecieved int
-	//log
+	heart         chan int
 }
 
 type VoteRequest struct {
@@ -66,7 +73,6 @@ func newNode(id string) Node {
 }
 
 func main() {
-	heartbeat := make(chan int, 1)
 	var wg sync.WaitGroup
 	rand.Seed(time.Now().UnixNano())
 
@@ -93,13 +99,14 @@ func main() {
 	fmt.Printf("Listening on port: %s\n", ports[portIndex])
 
 	node := newNode(ports[portIndex])
+	node.heart = make(chan int, 1)
 	fmt.Print("\n\n")
 	displayNode(node)
 
 	//TO DO: make client part of node
 	client := &http.Client{}
 	http.HandleFunc("/requestVote", requestVote(&node))
-	http.HandleFunc("/appendEntries", appendEntries(heartbeat))
+	http.HandleFunc("/appendEntries", appendEntries(node.heart))
 
 	electionTime := time.Duration(0)
 
@@ -107,19 +114,18 @@ func main() {
 		displayNode(node)
 		if node.state == "Follower" {
 			select {
-			case lTerm := <-heartbeat:
+			case lTerm := <-node.heart:
 				node.currentTerm = lTerm
 			case <-time.After((time.Second * 3)):
 				//Follower -> Candidate needs this
 				fmt.Println("")
-				node.pState = node.state
 				node.state = "Candidate"
 				electionTime = 0
 			}
 		}
 		if node.state == "Candidate" {
 			select {
-			case lTerm := <-heartbeat:
+			case lTerm := <-node.heart:
 				//Candidate -> Follower needs this
 				fmt.Print(clearLine, upLine, clearLine)
 				node.state = "Follower"
@@ -135,6 +141,7 @@ func main() {
 			}
 		}
 		if node.state == "Leader" {
+			displayNode(node)
 			sendHeartbeat(&node, ports)
 			time.Sleep(2 * time.Second)
 		}
@@ -200,6 +207,8 @@ func appendEntries(heart chan int) http.HandlerFunc {
 	}
 }
 
+//We want http handler function to
+
 func requestVote(node *Node) http.HandlerFunc {
 	// A handler fucntion for RequestVote RPCs
 	return func(w http.ResponseWriter, req *http.Request) {
@@ -213,18 +222,7 @@ func requestVote(node *Node) http.HandlerFunc {
 		if err != nil {
 			//fmt.Println("Could not unmarshall requestVote json")
 		} else {
-			vRes := VoteResponse{}
-			//Check here to make sure logs of candidate are up to date
-			//Clean this up a bit
-			//Sould the
-			if vReq.Term > node.currentTerm && (node.votedFor == "" || node.votedFor == vReq.CandidateId) {
-				vRes.VoteGranted = true
-				node.currentTerm = vReq.Term
-				node.votedFor = vReq.CandidateId
-			} else {
-				vRes.VoteGranted = false
-				vRes.Term = node.currentTerm
-			}
+			vRes := node.response(vReq)
 			data, err := json.Marshal(vRes)
 			if err != nil {
 				//fmt.Println("Error marshaling json in requestVote")
@@ -232,6 +230,19 @@ func requestVote(node *Node) http.HandlerFunc {
 			w.Write(data)
 		}
 	}
+}
+
+func (n *Node) response(vReq VoteRequest) VoteResponse {
+	vRes := VoteResponse{}
+	if vReq.Term > n.currentTerm && (n.votedFor == "" || n.votedFor == vReq.CandidateId) {
+		vRes.VoteGranted = true
+		n.currentTerm = vReq.Term
+		n.votedFor = vReq.CandidateId
+	} else {
+		vRes.VoteGranted = false
+		vRes.Term = n.currentTerm
+	}
+	return vRes
 }
 
 func startElection(n *Node, ps [4]string, c *http.Client) {
