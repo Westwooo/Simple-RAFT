@@ -84,18 +84,19 @@ func runRaft(node RAFT) {
 				//Follower -> Candidate needs this
 				fmt.Println("")
 				node.SetState("Candidate")
-				electionTime = 0
+				electionTime = time.Duration(rand.Intn(1000000000) * 3)
 			}
 		}
 		if node.State() == "Candidate" {
+			node.print()
 			select {
 			case lTerm := <-heart:
-				//Candidate -> Follower needs this
+				//Vulnerable to malicious agent sending ping with inflated term
 				fmt.Print(clearLine, upLine, clearLine)
 				node.SetState("Follower")
 				node.SetTerm(lTerm)
 			case <-time.After(electionTime):
-				startElection(&node)
+				startElection(node)
 				if node.Votes() > node.Svrs()/2 || (node.Votes() >= node.Svrs()/2 && node.Svrs()%2 == 0) {
 					node.SetState("Leader")
 				} else {
@@ -134,34 +135,34 @@ func runRaft(node RAFT) {
 	}
 }
 
-func startElection(node *RAFT) {
+func startElection(node RAFT) {
 	//startElection(node, ports, client)
 	//Increment current term and transition to candidate state
-	(*node).SetState("Candidate")
-	(*node).SetVotedFor("")
-	(*node).SetTerm((*node).Term() + 1)
-	(*node).print()
+	node.SetState("Candidate")
+	node.SetVotedFor("")
+	node.SetTerm(node.Term() + 1)
+	node.print()
 
 	//Send Request Vote to all servers in the cluster
 	vReq := VoteRequest{
-		Term:        (*node).Term(),
-		CandidateId: (*node).Id(),
+		Term:        node.Term(),
+		CandidateId: node.Id(),
 	}
 
 	//Node knows it is in cluster, and votes for itself
-	(*node).SetSvrs(1)
-	(*node).SetVotes(1)
+	node.SetSvrs(1)
+	node.SetVotes(1)
 
 	//Paralellize this
-	for _, c := range (*node).Conns() {
-		if c != (*node).Id() {
-			vRes := (*node).requestVotes(vReq, c)
+	for _, c := range node.Conns() {
+		if c != node.Id() {
+			vRes := node.requestVotes(vReq, c)
 			if vRes.VoteGranted {
-				(*node).SetVotes((*node).Votes() + 1)
+				node.SetVotes(node.Votes() + 1)
 			}
 		}
 	}
-	(*node).print()
+	node.print()
 }
 
 // Node contructor takes endpoints as strings, length is max number of nodes

@@ -11,10 +11,6 @@ func main() {
 	//Create a Node, with given clients and endpoints
 	node := newNode(&http.Client{}, "8080", "8081", "8082", "8083", "8084")
 
-	fmt.Printf("Listening on port: %s\n", node.id)
-	fmt.Print("\n\n")
-	node.print()
-
 	http.HandleFunc("/requestVote", requestVote(&node))
 	http.HandleFunc("/recieveEntries", recieveEntries(node.heart))
 

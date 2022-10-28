@@ -1,11 +1,14 @@
 package main
 
 import (
+	"net/http"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestResponse(t *testing.T) {
-	n := newNode()
+	n := newNode(&http.Client{}, "8080", "8081", "8082", "8083", "8084")
 	vReq := VoteRequest{
 		Term:        1,
 		CandidateId: "name",
@@ -42,18 +45,86 @@ func TestResponse(t *testing.T) {
 	}
 }
 
-func TestSetConns(t *testing.T) {
-	n := newNode()
+func TestRunRaft(t *testing.T) {
 
-	if len(n.conns) != 0 {
-		t.Errorf("expecting length of 0, instead got: %d", len(n.conns))
+	mNode := mockNode{
+		currentTerm: 0,
+		votedFor:    "",
+		state:       "Follower",
+		svrs:        0,
+		heart:       make(chan int, 1),
 	}
-	n.setConns()
-	testArray := [5]string{"8080", "8081", "8082", "8083", "8084"}
-	for i, p := range testArray {
-		if !(n.conns[i] == p) {
-			t.Errorf("expected [8080 8081 8082 8083 8084]")
-			t.Errorf("got: %v", n.conns)
-		}
+	ep := [3]string{"A", "B", "C"}
+	for _, e := range ep {
+		mNode.conns = append(mNode.conns, e)
 	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runRaft(&mNode)
+	}()
+
+	time.Sleep(1 * time.Second)
+
+	//Node should remain follower for up to three seconds
+	if mNode.state != "Follower" {
+		t.Errorf("response incorrect, got %s, expected Follower", mNode.state)
+	}
+
+	//Recieving a ping on heart should keep the node as a follower and update currentTerm
+	mNode.heart <- 3
+	time.Sleep(2010 * time.Millisecond)
+
+	if mNode.state != "Follower" && mNode.currentTerm != 3 {
+		t.Errorf("response incorrect, got (%s, %d), expected (Follower, 3)", mNode.state, mNode.currentTerm)
+	}
+
+	//After 3 seconds node should become a candidate
+	time.Sleep(1010 * time.Millisecond)
+	if mNode.state != "Candidate" && mNode.currentTerm != 3 {
+		t.Errorf("response incorrect, got (%s, %d) expected (Candidate, 3)", mNode.state, mNode.currentTerm)
+	}
+
+	//Recieving a ping while candidate should retrun to follower
+	mNode.heart <- 4
+	time.Sleep(1 * time.Millisecond)
+	if mNode.state != "Follower" && mNode.currentTerm != 4 {
+		t.Errorf("response incorrect, got (%s, %d) expected (Follower, 4)", mNode.state, mNode.currentTerm)
+	}
+
+	time.Sleep(6 * time.Second)
+	if mNode.state != "Leader" && mNode.currentTerm != 5 {
+		t.Errorf("response incorrect, got (%s, %d) expected (Leader, 5)", mNode.state, mNode.currentTerm)
+	}
+}
+
+func TestStartElection(t *testing.T) {
+	mNode := mockNode{
+		currentTerm: 0,
+		votedFor:    "",
+		state:       "Follower",
+		svrs:        0,
+		heart:       make(chan int, 1),
+	}
+	startElection(&mNode)
+	time.Sleep(1 * time.Millisecond)
+	if mNode.state != "Candidate" {
+		t.Errorf("response incorrecet got %s, expected Candidate", mNode.state)
+	}
+	if mNode.currentTerm != 1 {
+		t.Errorf("response incorrect got %d, expected 1", mNode.currentTerm)
+	}
+	if mNode.svrs != 1 {
+		t.Errorf("response incorrect got %d, expected 1", mNode.svrs)
+	}
+	if mNode.votesRecieved != 1 {
+		t.Errorf("response incorrect got %d, expected 1", mNode.votesRecieved)
+	}
+
+	ep := [3]string{"A", "B", "C"}
+	for _, e := range ep {
+		mNode.conns = append(mNode.conns, e)
+	}
+	mNode.conns =
 }

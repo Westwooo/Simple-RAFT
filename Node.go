@@ -100,6 +100,8 @@ func (n *Node) runServer() error {
 		return errors.New("all endpoints are in use")
 	}
 	n.id = n.conns[portIndex]
+	fmt.Printf("Listening on port: %s\n", n.id)
+	fmt.Print("\n\n")
 	return nil
 }
 
